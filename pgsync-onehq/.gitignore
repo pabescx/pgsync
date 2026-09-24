@@ -1,0 +1,11 @@
+k8s/
+entrypoint-.sh
+
+# Python cache
+__pycache__/
+.pytest_cache
+*.py[cod]
+*$py.class
+tests/integration/__pycache__/
+tests/unit/__pycache__/
+scripts/__pycache__/

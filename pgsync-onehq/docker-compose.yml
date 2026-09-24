@@ -1,0 +1,63 @@
+# pgsync stack: a producer and a consumer, steady-state only. Bootstrapping and
+# reindexing are one-shot Jobs (PGSYNC_ROLE=bootstrap / reindex), not services
+# here -- see entrypoint.sh.
+#
+# Replicas, restart policy and scaling are deliberately NOT set here: OKD owns
+# them. Two things it must enforce, because they are correctness constraints and
+# not preferences:
+#
+#   producer  replicas 1, strategy Recreate  -- a replication slot allows a
+#             single active reader, so two producers fight over it
+#   consumer  replicas N                     -- scale freely
+#
+# Index lifecycle: schema.json declares the ALIAS of each index. resolve_schema.py
+# rewrites it to `<alias>_<timestamp>` based on Elasticsearch. A `reindex` Job
+# runs parallel_sync and then finalize_reindex.py, which promotes the alias once
+# the backfill is verified, then deletes the superseded indices and drops their
+# replication slots. The producer only ever follows an alias that already exists.
+#
+# To force a full reindex: run a Job with PGSYNC_ROLE=reindex.
+
+x-pgsync-common: &pgsync-common
+  image: toluaina1/pgsync:latest
+  networks: [search]
+  volumes:
+    - ./schemas/${SCHEMA_NAME:-readygop}/schema.json:/app/schema.json:ro
+    - ./entrypoint.sh:/entrypoint.sh:ro
+    - ./scripts:/app/scripts:ro
+    - ./plugins:/app/plugins:ro
+  entrypoint: ["/bin/sh", "/entrypoint.sh"]
+  environment: &pgsync-env
+    # These two build the index name: <base>_${APP_ENV}_<timestamp>
+    APP_ENV: ${APP_ENV:-dev}
+    DB_NAME: ${DB_NAME:-readygop}
+    PG_URL: postgresql://postgres:postgres@host.docker.internal:5432/${DB_NAME:-readygop}
+    ELASTICSEARCH_URL: http://elasticsearch:9200
+    REDIS_HOST: redis
+    REDIS_PORT: 6379
+    REDIS_CHECKPOINT: "true"
+    PYTHONPATH: /app
+    LOG_INTERVAL: "10"
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+  # Only ever follows an alias a `reindex` Job already published.
+  pgsync-producer:
+    <<: *pgsync-common
+    environment:
+      <<: *pgsync-env
+      PGSYNC_ROLE: producer
+
+  # Waits for the alias before starting. NUM_WORKERS is threads *per index*.
+  pgsync-consumer:
+    <<: *pgsync-common
+    environment:
+      <<: *pgsync-env
+      PGSYNC_ROLE: consumer
+      NUM_WORKERS: ${NUM_WORKERS:-2}
+
+networks:
+  search:
+    external: true
+    name: downloads_default

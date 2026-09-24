@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+DETAILS.md
+k8s-resources.yaml
+__pycache__/
+*.py[cod]
+.DS_Store
